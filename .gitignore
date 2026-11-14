@@ -6,3 +6,4 @@
 /packaging/arch/muzeec-cli-*.tar.gz
 *.pkg.tar.zst
 *.part
+.commandcode
