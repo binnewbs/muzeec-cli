@@ -1,6 +1,7 @@
 //! muzeec-cli terminal UI: immediate-mode ratatui app driven through IPC.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -12,10 +13,11 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
 use serde_json::{Value, json};
 
+use muzeec_cli_core::config::{ArtMode, Config, ReplayGainMode, VisualizerMode};
 use muzeec_cli_core::error::Result;
 use muzeec_cli_core::ipc::Client;
 
@@ -74,6 +76,175 @@ enum InputMode {
     Command(String),
 }
 
+struct ConfigMenu {
+    idx: usize,
+    editing: Option<String>,
+}
+
+/// Config fields shown in the menu: (label, is free-text).
+const CONFIG_FIELDS: [(&str, bool); 23] = [
+    ("Music dirs", true),
+    ("Follow symlinks", false),
+    ("Watch library", false),
+    ("Scan workers", false),
+    ("Output device", true),
+    ("Sample rate", false),
+    ("Buffer (ms)", false),
+    ("Gapless", false),
+    ("Crossfade (s)", false),
+    ("Crossfade album only", false),
+    ("ReplayGain", false),
+    ("Volume", false),
+    ("Resume on start", false),
+    ("Idle stop", false),
+    ("Theme", true),
+    ("Album art", false),
+    ("Visualizer", false),
+    ("FPS", false),
+    ("MPRIS", false),
+    ("Notifications", false),
+    ("Notify art", false),
+    ("EQ enabled", false),
+    ("EQ preamp (dB)", false),
+];
+
+const SAMPLE_RATES: [Option<u32>; 5] = [
+    None,
+    Some(44_100),
+    Some(48_000),
+    Some(96_000),
+    Some(192_000),
+];
+const ART_MODES: [ArtMode; 6] = [
+    ArtMode::Auto,
+    ArtMode::Kitty,
+    ArtMode::Sixel,
+    ArtMode::Iterm2,
+    ArtMode::Halfblocks,
+    ArtMode::Off,
+];
+const VISUALIZER_MODES: [VisualizerMode; 3] = [
+    VisualizerMode::Bars,
+    VisualizerMode::Osc,
+    VisualizerMode::Off,
+];
+const REPLAYGAIN_MODES: [ReplayGainMode; 3] = [
+    ReplayGainMode::Off,
+    ReplayGainMode::Track,
+    ReplayGainMode::Album,
+];
+
+fn on_off(value: bool) -> String {
+    if value {
+        "on".to_string()
+    } else {
+        "off".to_string()
+    }
+}
+
+fn field_value(config: &Config, idx: usize) -> String {
+    match idx {
+        0 => config.library.music_dirs.join(", "),
+        1 => on_off(config.library.follow_symlinks),
+        2 => on_off(config.library.watch),
+        3 => config.library.scan_workers.to_string(),
+        4 => config.playback.device.clone(),
+        5 => config
+            .playback
+            .engine_sample_rate
+            .map(|rate| rate.to_string())
+            .unwrap_or_else(|| "auto".into()),
+        6 => config.playback.buffer_ms.to_string(),
+        7 => on_off(config.playback.gapless),
+        8 => format!("{:.1}", config.playback.crossfade_secs),
+        9 => on_off(config.playback.crossfade_on_album_change_only),
+        10 => format!("{:?}", config.playback.replaygain).to_lowercase(),
+        11 => config.playback.volume.to_string(),
+        12 => on_off(config.playback.resume_on_start),
+        13 => on_off(config.playback.idle_stop),
+        14 => config.ui.theme.clone(),
+        15 => format!("{:?}", config.ui.album_art).to_lowercase(),
+        16 => format!("{:?}", config.ui.visualizer).to_lowercase(),
+        17 => config.ui.fps.to_string(),
+        18 => on_off(config.integrations.mpris),
+        19 => on_off(config.integrations.notifications),
+        20 => on_off(config.integrations.notify_art),
+        21 => on_off(config.eq.enabled),
+        22 => format!("{:.1}", config.eq.preamp_db),
+        _ => String::new(),
+    }
+}
+
+fn cycle_index(idx: usize, len: usize, dir: i32) -> usize {
+    if dir >= 0 { (idx + 1) % len } else { (idx + len - 1) % len }
+}
+
+fn cycle<T: PartialEq + Copy>(opts: &[T], current: T, dir: i32) -> T {
+    let idx = opts.iter().position(|o| *o == current).unwrap_or(0);
+    opts[cycle_index(idx, opts.len(), dir)]
+}
+
+fn field_adjust(config: &mut Config, idx: usize, dir: i32) {
+    let step = dir.signum() as i64;
+    match idx {
+        1 => config.library.follow_symlinks = !config.library.follow_symlinks,
+        2 => config.library.watch = !config.library.watch,
+        3 => {
+            config.library.scan_workers =
+                (config.library.scan_workers as i64 + step).clamp(0, 64) as usize
+        }
+        5 => {
+            let idx = SAMPLE_RATES
+                .iter()
+                .position(|r| *r == config.playback.engine_sample_rate)
+                .unwrap_or(0);
+            config.playback.engine_sample_rate = SAMPLE_RATES[cycle_index(idx, SAMPLE_RATES.len(), dir)];
+        }
+        6 => {
+            config.playback.buffer_ms =
+                (config.playback.buffer_ms as i64 + step * 5).clamp(10, 100) as u32
+        }
+        7 => config.playback.gapless = !config.playback.gapless,
+        8 => {
+            config.playback.crossfade_secs =
+                (config.playback.crossfade_secs + step as f32 * 0.5).clamp(0.0, 12.0)
+        }
+        9 => {
+            config.playback.crossfade_on_album_change_only =
+                !config.playback.crossfade_on_album_change_only
+        }
+        10 => config.playback.replaygain = cycle(&REPLAYGAIN_MODES, config.playback.replaygain, dir),
+        11 => config.playback.volume = (config.playback.volume as i64 + step * 5).clamp(0, 100) as u8,
+        12 => config.playback.resume_on_start = !config.playback.resume_on_start,
+        13 => config.playback.idle_stop = !config.playback.idle_stop,
+        15 => config.ui.album_art = cycle(&ART_MODES, config.ui.album_art, dir),
+        16 => config.ui.visualizer = cycle(&VISUALIZER_MODES, config.ui.visualizer, dir),
+        17 => config.ui.fps = (config.ui.fps as i64 + step * 5).clamp(1, 240) as u32,
+        18 => config.integrations.mpris = !config.integrations.mpris,
+        19 => config.integrations.notifications = !config.integrations.notifications,
+        20 => config.integrations.notify_art = !config.integrations.notify_art,
+        21 => config.eq.enabled = !config.eq.enabled,
+        22 => config.eq.preamp_db = (config.eq.preamp_db + step as f32 * 0.5).clamp(-20.0, 20.0),
+        _ => {}
+    }
+}
+
+fn field_set_text(config: &mut Config, idx: usize, text: &str) {
+    match idx {
+        0 => {
+            config.library.music_dirs = text
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect()
+        }
+        4 => config.playback.device = text.trim().to_string(),
+        14 => config.ui.theme = text.trim().to_string(),
+        _ => {}
+    }
+}
+
 struct App {
     client: Client,
     sidebar: Sidebar,
@@ -87,10 +258,14 @@ struct App {
     theme: String,
     quit: bool,
     message: Option<String>,
+    config: Config,
+    config_path: PathBuf,
+    menu: Option<ConfigMenu>,
 }
 
 impl App {
-    fn new(client: Client, theme: Option<String>) -> Self {
+    fn new(client: Client, theme: Option<String>, config_path: PathBuf) -> Self {
+        let config = Config::load_from(&config_path).unwrap_or_default();
         Self {
             client,
             sidebar: Sidebar::Tracks,
@@ -101,9 +276,12 @@ impl App {
             status: Value::Null,
             input: InputMode::None,
             filter: None,
-            theme: theme.unwrap_or_else(|| "catppuccin-mocha".into()),
+            theme: theme.unwrap_or_else(|| config.ui.theme.clone()),
             quit: false,
             message: None,
+            config,
+            config_path,
+            menu: None,
         }
     }
 
@@ -295,8 +473,94 @@ impl App {
         self.refresh_status();
     }
 
+    fn handle_menu_key(&mut self, key: KeyEvent) {
+        let Some(idx) = self.menu.as_ref().map(|menu| menu.idx) else {
+            return;
+        };
+
+        if let Some(mut buf) = self.menu.as_ref().and_then(|menu| menu.editing.clone()) {
+            match key.code {
+                KeyCode::Esc => self.menu.as_mut().unwrap().editing = None,
+                KeyCode::Enter => {
+                    self.menu.as_mut().unwrap().editing = None;
+                    field_set_text(&mut self.config, idx, &buf);
+                    self.sync_theme();
+                }
+                KeyCode::Backspace => {
+                    buf.pop();
+                    self.menu.as_mut().unwrap().editing = Some(buf);
+                }
+                KeyCode::Char(c) => {
+                    buf.push(c);
+                    self.menu.as_mut().unwrap().editing = Some(buf);
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.menu = None,
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(menu) = &mut self.menu {
+                    menu.idx = (menu.idx + 1) % CONFIG_FIELDS.len();
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(menu) = &mut self.menu {
+                    menu.idx = (menu.idx + CONFIG_FIELDS.len() - 1) % CONFIG_FIELDS.len();
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                field_adjust(&mut self.config, idx, -1);
+                self.sync_theme();
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                field_adjust(&mut self.config, idx, 1);
+                self.sync_theme();
+            }
+            KeyCode::Enter if CONFIG_FIELDS[idx].1 => {
+                let value = field_value(&self.config, idx);
+                self.menu.as_mut().unwrap().editing = Some(value);
+            }
+            KeyCode::Enter => {
+                field_adjust(&mut self.config, idx, 1);
+                self.sync_theme();
+            }
+            KeyCode::Char('s') => self.save_config(),
+            _ => {}
+        }
+    }
+
+    fn sync_theme(&mut self) {
+        self.theme = self.config.ui.theme.clone();
+    }
+
+    fn save_config(&mut self) {
+        if let Err(e) = self.config.validate() {
+            self.message = Some(format!("invalid config: {e}"));
+            return;
+        }
+        if let Some(parent) = self.config_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let result = toml::to_string_pretty(&self.config)
+            .map_err(|e| e.to_string())
+            .and_then(|text| std::fs::write(&self.config_path, text).map_err(|e| e.to_string()));
+        match result {
+            Ok(()) => {
+                self.sync_theme();
+                self.message = Some("config saved · restart daemon to apply".into());
+            }
+            Err(e) => self.message = Some(format!("config save failed: {e}")),
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
-        // Input modes first.
+        if self.menu.is_some() {
+            self.handle_menu_key(key);
+            return;
+        }
         let is_command = matches!(self.input, InputMode::Command(_));
         match &mut self.input {
             InputMode::Search(buf) | InputMode::Command(buf) => {
@@ -331,6 +595,12 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('C') => {
+                self.menu = Some(ConfigMenu {
+                    idx: 0,
+                    editing: None,
+                })
+            }
             KeyCode::Char('/') => self.input = InputMode::Search(String::new()),
             KeyCode::Char(':') => self.input = InputMode::Command(String::new()),
             KeyCode::Tab | KeyCode::Char('l') => {
@@ -529,6 +799,7 @@ fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_progress(frame, bars[0], app);
     draw_volume(frame, bars[1], app);
     draw_footer(frame, chunks[3], app);
+    draw_config_menu(frame, area, app);
 }
 
 fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -736,7 +1007,7 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         InputMode::Command(buf) => (":", buf.clone()),
         InputMode::None => (
             "",
-            "space play/pause  n/N next/prev  [/] seek  +/- vol  m mute  s stop  a add  c clear  r shuffle  R loop"
+            "C config  space play/pause  n/N next/prev  [/] seek  +/- vol  m mute  s stop  a add  c clear  r shuffle  R loop"
                 .to_string(),
         ),
     };
@@ -751,9 +1022,71 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     );
 }
 
+fn draw_config_menu(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let Some(menu) = &app.menu else {
+        return;
+    };
+    let width = area.width.saturating_sub(4).min(64);
+    let height = (CONFIG_FIELDS.len() as u16 + 4).min(area.height.saturating_sub(2));
+    if width == 0 || height == 0 {
+        return;
+    }
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Config ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let visible = inner.height.saturating_sub(1) as usize;
+    if visible == 0 {
+        return;
+    }
+    let offset = menu.idx.saturating_sub(visible - 1);
+    let lines: Vec<Line> = CONFIG_FIELDS
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible)
+        .map(|(i, (label, _))| {
+            let value = match &menu.editing {
+                Some(buf) if i == menu.idx => format!("{buf}▏"),
+                _ => field_value(&app.config, i),
+            };
+            let style = if i == menu.idx {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(format!(" {label:<24} {value}"), style))
+        })
+        .collect();
+
+    let list_area = Rect::new(inner.x, inner.y, inner.width, visible as u16);
+    frame.render_widget(Paragraph::new(lines), list_area);
+
+    let hint = if menu.editing.is_some() {
+        "enter apply  esc cancel"
+    } else {
+        "j/k move  h/l change  enter edit/toggle  s save  esc close"
+    };
+    let hint_area = Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+        hint_area,
+    );
+}
+
 /// Run the TUI until the user quits.
-pub fn run(client: Client, theme: Option<String>) -> Result<()> {
-    let mut app = App::new(client, theme);
+pub fn run(client: Client, theme: Option<String>, config_path: PathBuf) -> Result<()> {
+    let mut app = App::new(client, theme, config_path);
     app.refresh_status();
     app.refresh_rows();
 

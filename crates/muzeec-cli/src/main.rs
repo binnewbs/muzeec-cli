@@ -271,7 +271,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 _ => None,
             };
             let client = DaemonClient::connect(cli.no_daemon)?;
-            muzeec_cli_tui::run(client.into_inner(), theme).map_err(|e| e.to_string())
+            let config_path = cli
+                .config
+                .clone()
+                .unwrap_or_else(|| muzeec_cli_core::paths::Paths::resolve().config_file());
+            muzeec_cli_tui::run(client.into_inner(), theme, config_path).map_err(|e| e.to_string())
         }
         Some(Command::Completions { shell }) => {
             let mut cmd = Cli::command();
