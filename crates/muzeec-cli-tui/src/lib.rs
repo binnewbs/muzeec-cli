@@ -15,6 +15,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
+use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{FilterType, Resize, StatefulImage};
 use serde_json::{Value, json};
 
 use muzeec_cli_core::config::{ArtMode, Config, ReplayGainMode, VisualizerMode};
@@ -133,6 +136,23 @@ const REPLAYGAIN_MODES: [ReplayGainMode; 3] = [
     ReplayGainMode::Track,
     ReplayGainMode::Album,
 ];
+
+fn protocol_for(mode: ArtMode, detected: ProtocolType) -> ProtocolType {
+    match mode {
+        ArtMode::Auto => detected,
+        ArtMode::Kitty => ProtocolType::Kitty,
+        ArtMode::Sixel => ProtocolType::Sixel,
+        ArtMode::Iterm2 => ProtocolType::Iterm2,
+        ArtMode::Halfblocks | ArtMode::Off => ProtocolType::Halfblocks,
+    }
+}
+
+fn make_picker(mode: ArtMode) -> Picker {
+    match mode {
+        ArtMode::Halfblocks | ArtMode::Off => Picker::halfblocks(),
+        _ => Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()),
+    }
+}
 
 fn on_off(value: bool) -> String {
     if value {
@@ -261,11 +281,18 @@ struct App {
     config: Config,
     config_path: PathBuf,
     menu: Option<ConfigMenu>,
+    art: Option<StatefulProtocol>,
+    art_hash: Option<String>,
+    picker: Picker,
+    detected_protocol: ProtocolType,
 }
 
 impl App {
     fn new(client: Client, theme: Option<String>, config_path: PathBuf) -> Self {
         let config = Config::load_from(&config_path).unwrap_or_default();
+        let mut picker = make_picker(config.ui.album_art);
+        let detected_protocol = picker.protocol_type();
+        picker.set_protocol_type(protocol_for(config.ui.album_art, detected_protocol));
         Self {
             client,
             sidebar: Sidebar::Tracks,
@@ -282,6 +309,10 @@ impl App {
             config,
             config_path,
             menu: None,
+            art: None,
+            art_hash: None,
+            picker,
+            detected_protocol,
         }
     }
 
@@ -297,8 +328,26 @@ impl App {
 
     fn refresh_status(&mut self) {
         if let Some(v) = self.call("status", Value::Null) {
+            if self.config.ui.album_art == ArtMode::Off {
+                self.art = None;
+                self.art_hash = None;
+            } else {
+                let hash = v["track"]["art_hash"].as_str().map(str::to_string);
+                if hash != self.art_hash {
+                    self.art_hash = hash;
+                    self.art = self.load_art(&v);
+                }
+            }
             self.status = v;
         }
+    }
+
+    fn load_art(&mut self, status: &Value) -> Option<StatefulProtocol> {
+        let track_id = status["track"]["track_id"].as_i64()?;
+        let v = self.call("art.get", json!({"track_id": track_id, "size": 1024}))?;
+        let path = v["path"].as_str()?;
+        let img = image::open(path).ok()?;
+        Some(self.picker.new_resize_protocol(img))
     }
 
     fn refresh_rows(&mut self) {
@@ -550,6 +599,10 @@ impl App {
         match result {
             Ok(()) => {
                 self.sync_theme();
+                self.picker
+                    .set_protocol_type(protocol_for(self.config.ui.album_art, self.detected_protocol));
+                self.art = None;
+                self.art_hash = None;
                 self.message = Some("config saved · restart daemon to apply".into());
             }
             Err(e) => self.message = Some(format!("config save failed: {e}")),
@@ -765,7 +818,7 @@ fn fmt_duration(ms: u64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-fn draw(frame: &mut Frame<'_>, app: &App) {
+fn draw(frame: &mut Frame<'_>, app: &mut App) {
     let area = frame.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -929,13 +982,30 @@ fn draw_main(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_now_playing(frame: &mut Frame<'_>, area: Rect, app: &App) {
+fn draw_now_playing(frame: &mut Frame<'_>, area: Rect, app: &mut App) {
     let block = Block::default()
         .title(" Now Playing ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    let mut body = inner;
+    if let Some(art) = &mut app.art {
+        let art_height = inner.width.min(inner.height.saturating_sub(6)).min(16);
+        if art_height >= 2 {
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(art_height), Constraint::Min(0)])
+                .split(inner);
+            frame.render_stateful_widget(
+                StatefulImage::new().resize(Resize::Fit(Some(FilterType::Lanczos3))),
+                parts[0],
+                art,
+            );
+            body = parts[1];
+        }
+    }
 
     let mut lines = Vec::new();
     if let Some(track) = app.status.get("track").filter(|t| !t.is_null()) {
@@ -969,7 +1039,7 @@ fn draw_now_playing(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
     frame.render_widget(
         Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: true }),
-        inner,
+        body,
     );
 }
 

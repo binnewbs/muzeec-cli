@@ -51,7 +51,7 @@ rustfft = "6"
 # ui
 ratatui = "0.30"
 crossterm = "0.29"
-ratatui-image = "12.0.0-rc.3"
+ratatui-image = { version = "12.0.0-rc.3", default-features = false, features = ["crossterm", "image-defaults"] }
 nucleo = "0.5"
 
 # daemon

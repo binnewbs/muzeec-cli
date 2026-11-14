@@ -10,7 +10,9 @@ muzeec-cli-core = { path = "../muzeec-cli-core" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+image.workspace = true
 ratatui.workspace = true
+ratatui-image.workspace = true
 crossterm.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
