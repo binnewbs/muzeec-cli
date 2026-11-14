@@ -57,6 +57,7 @@ struct Row {
     id: i64,
     primary: String,
     secondary: String,
+    albumartist: String,
     duration_ms: u64,
     playable: bool,
 }
@@ -142,6 +143,7 @@ impl App {
                                 t["title"].as_str().unwrap_or("")
                             ),
                             secondary: t["album"].as_str().unwrap_or("").to_string(),
+                            albumartist: t["albumartist"].as_str().unwrap_or("").to_string(),
                             duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
                             playable: true,
                         });
@@ -160,6 +162,7 @@ impl App {
                             id: 0,
                             primary: a["name"].as_str().unwrap_or("").to_string(),
                             secondary: format!("{} tracks", a["tracks"].as_u64().unwrap_or(0)),
+                            albumartist: String::new(),
                             duration_ms: 0,
                             playable: false,
                         });
@@ -181,6 +184,7 @@ impl App {
                                 a["year"].as_u64().unwrap_or(0),
                                 a["track_count"].as_u64().unwrap_or(0)
                             ),
+                            albumartist: String::new(),
                             duration_ms: 0,
                             playable: false,
                         });
@@ -194,6 +198,7 @@ impl App {
                             id: 0,
                             primary: p["name"].as_str().unwrap_or("").to_string(),
                             secondary: format!("{} tracks", p["track_count"].as_u64().unwrap_or(0)),
+                            albumartist: String::new(),
                             duration_ms: 0,
                             playable: false,
                         });
@@ -216,6 +221,7 @@ impl App {
                                 t["title"].as_str().unwrap_or("")
                             ),
                             secondary: format!("#{}", i + 1),
+                            albumartist: String::new(),
                             duration_ms: t["duration_ms"].as_u64().unwrap_or(0),
                             playable: true,
                         });
@@ -237,7 +243,30 @@ impl App {
             return;
         };
         match self.sidebar {
-            Sidebar::Tracks | Sidebar::Queue => {
+            Sidebar::Tracks => {
+                let ids: Vec<i64> = if row.secondary.is_empty() {
+                    Vec::new()
+                } else {
+                    self.call(
+                        "library.album-tracks",
+                        json!({"album": row.secondary, "albumartist": row.albumartist}),
+                    )
+                    .and_then(|v| {
+                        v.as_array()
+                            .map(|a| a.iter().filter_map(|t| t["id"].as_i64()).collect())
+                    })
+                    .unwrap_or_default()
+                };
+                if ids.len() > 1 {
+                    self.call(
+                        "player.play",
+                        json!({"tracks": ids, "mode": "replace", "start": row.id}),
+                    );
+                } else {
+                    self.call("player.play", json!({"tracks": [row.id], "mode": "now"}));
+                }
+            }
+            Sidebar::Queue => {
                 self.call("player.play", json!({"tracks": [row.id], "mode": "now"}));
             }
             Sidebar::Artists => {
@@ -378,6 +407,11 @@ impl App {
                         self.refresh_rows();
                     }
                 }
+            }
+            KeyCode::Char('c') if self.sidebar == Sidebar::Queue => {
+                self.call("queue.clear", Value::Null);
+                self.refresh_rows();
+                self.message = Some("queue cleared".into());
             }
             KeyCode::Char('a') => {
                 if let Some(row) = self.rows.get(self.row_idx).cloned()
@@ -702,7 +736,7 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         InputMode::Command(buf) => (":", buf.clone()),
         InputMode::None => (
             "",
-            "space play/pause  n/N next/prev  [/] seek  +/- vol  m mute  s stop  a add  r shuffle  R loop"
+            "space play/pause  n/N next/prev  [/] seek  +/- vol  m mute  s stop  a add  c clear  r shuffle  R loop"
                 .to_string(),
         ),
     };
