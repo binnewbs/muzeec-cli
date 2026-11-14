@@ -487,7 +487,13 @@ fn draw(frame: &mut Frame<'_>, app: &App) {
     draw_sidebar(frame, body[0], app);
     draw_main(frame, body[1], app);
     draw_now_playing(frame, body[2], app);
-    draw_progress(frame, chunks[2], app);
+
+    let bars = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(30), Constraint::Length(24)])
+        .split(chunks[2]);
+    draw_progress(frame, bars[0], app);
+    draw_volume(frame, bars[1], app);
     draw_footer(frame, chunks[3], app);
 }
 
@@ -680,13 +686,23 @@ fn draw_progress(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(gauge, area);
 }
 
+fn draw_volume(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let vol = app.status["volume"].as_u64().unwrap_or(0).min(100);
+    let gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title(" Volume "))
+        .gauge_style(Style::default().fg(Color::Green))
+        .ratio(vol as f64 / 100.0)
+        .label(format!("{vol}%"));
+    frame.render_widget(gauge, area);
+}
+
 fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let (prompt, line) = match &app.input {
         InputMode::Search(buf) => ("/ ", buf.clone()),
         InputMode::Command(buf) => (":", buf.clone()),
         InputMode::None => (
             "",
-            "j/k move  enter play  space pause  n/N next/prev  / search  : command  ? help  q quit"
+            "space play/pause  n/N next/prev  [/] seek  +/- vol  m mute  s stop  a add  r shuffle  R loop"
                 .to_string(),
         ),
     };
