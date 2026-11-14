@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=muzeec-cli
+GenericName=Music Player
+Comment=Terminal music player with gapless playback, library, and MPRIS
+Exec=muzeec-cli tui
+Icon=muzeec-cli
+Terminal=true
+Categories=AudioVideo;Audio;Player;
+Keywords=music;audio;player;terminal;tui;
+StartupNotify=false

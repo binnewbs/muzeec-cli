@@ -1,0 +1,15 @@
+[Unit]
+Description=muzeec-cli music player daemon
+Documentation=man:muzeec-cli(1)
+After=pipewire.service pipewire-pulse.service pulseaudio.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/muzeec-cli-daemon --foreground
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

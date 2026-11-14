@@ -1,0 +1,77 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/muzeec-cli-core",
+    "crates/muzeec-cli-tui",
+    "crates/muzeec-cli",
+    "crates/muzeec-cli-daemon",
+]
+default-members = ["crates/muzeec-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+# core
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+thiserror = "2"
+color-eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "6"
+humantime = "2"
+blake3 = "1"
+arc-swap = "1"
+crossbeam-channel = "0.5"
+rand = "0.9"
+walkdir = "2"
+rayon = "1"
+notify = "8"
+notify-rust = "4"
+tokio = { version = "1", features = ["full"] }
+
+# data
+rusqlite = { version = "0.42", features = ["bundled", "blob"] }
+lofty = "0.25"
+image = "0.25"
+
+# audio
+symphonia = { version = "0.6", features = ["all"] }
+symphonia-opus = "0.1"
+cpal = "0.18"
+rtrb = "0.4"
+ebur128 = "0.1"
+rustfft = "6"
+
+# ui
+ratatui = "0.30"
+crossterm = "0.29"
+ratatui-image = "12.0.0-rc.3"
+nucleo = "0.5"
+
+# daemon
+zbus = "6.3"
+mpris-server = "0.11"
+
+# cli
+clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+clap_mangen = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = "symbols"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

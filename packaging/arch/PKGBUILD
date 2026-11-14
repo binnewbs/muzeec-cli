@@ -1,0 +1,47 @@
+# Maintainer: muzeec-cli contributors
+pkgname=muzeec-cli
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Terminal music player: gapless, crossfade, library, MPRIS"
+arch=('x86_64' 'aarch64')
+url="https://github.com/muzeec-cli/muzeec-cli"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'alsa-lib' 'sqlite' 'dbus')
+makedepends=('cargo' 'rust' 'pkgconf')
+optdepends=('playerctl: MPRIS CLI control'
+            'libnotify: desktop notifications'
+            'ttf-nerd-fonts-symbols: TUI icons')
+source=("muzeec-cli-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  # makepkg injects --as-needed LDFLAGS and -flto=auto into CFLAGS. The latter
+  # turns bundled SQLite's C objects into GCC LTO bitcode that lld cannot resolve.
+  export LDFLAGS=""
+  export CFLAGS="${CFLAGS//-flto=auto/}"
+  export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgbase --remap-path-prefix=$PWD=."
+  cargo fetch --locked
+  cargo build --release --frozen --locked --workspace
+  "$CARGO_TARGET_DIR/release/muzeec-cli" completions bash > muzeec-cli.bash
+  "$CARGO_TARGET_DIR/release/muzeec-cli" completions zsh  > _muzeec-cli
+  "$CARGO_TARGET_DIR/release/muzeec-cli" completions fish > muzeec-cli.fish
+  "$CARGO_TARGET_DIR/release/muzeec-cli" man > muzeec-cli.1
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "$srcdir/target/release/muzeec-cli"        "$pkgdir/usr/bin/muzeec-cli"
+  install -Dm755 "$srcdir/target/release/muzeec-cli-daemon" "$pkgdir/usr/bin/muzeec-cli-daemon"
+  install -Dm644 muzeec-cli.bash "$pkgdir/usr/share/bash-completion/completions/muzeec-cli"
+  install -Dm644 _muzeec-cli     "$pkgdir/usr/share/zsh/site-functions/_muzeec-cli"
+  install -Dm644 muzeec-cli.fish "$pkgdir/usr/share/fish/vendor_completions.d/muzeec-cli.fish"
+  install -Dm644 muzeec-cli.1    "$pkgdir/usr/share/man/man1/muzeec-cli.1"
+  install -Dm644 assets/muzeec-cli.desktop "$pkgdir/usr/share/applications/muzeec-cli.desktop"
+  install -Dm644 assets/muzeec-cli.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/muzeec-cli.svg"
+  install -Dm644 assets/muzeec-cli-daemon.service "$pkgdir/usr/lib/systemd/user/muzeec-cli-daemon.service"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

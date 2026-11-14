@@ -1,0 +1,1 @@
+//! Placeholder gapless module.
