@@ -351,8 +351,8 @@ impl App {
     }
 
     fn refresh_rows(&mut self) {
+        let prev_idx = self.row_idx;
         self.rows.clear();
-        self.row_idx = 0;
         match self.sidebar {
             Sidebar::Tracks => {
                 let v = if let Some(filter) = &self.filter {
@@ -456,12 +456,14 @@ impl App {
                 }
             }
         }
+        self.row_idx = prev_idx.min(self.rows.len().saturating_sub(1));
     }
 
     fn switch_sidebar(&mut self, index: usize) {
         self.sidebar_idx = index % Sidebar::ALL.len();
         self.sidebar = Sidebar::ALL[self.sidebar_idx];
         self.filter = None;
+        self.row_idx = 0;
         self.refresh_rows();
     }
 
@@ -485,10 +487,12 @@ impl App {
                     .unwrap_or_default()
                 };
                 if ids.len() > 1 {
-                    self.call(
-                        "player.play",
-                        json!({"tracks": ids, "mode": "replace", "start": row.id}),
-                    );
+                    let mut ordered = ids;
+                    match ordered.iter().position(|id| *id == row.id) {
+                        Some(pos) => ordered.rotate_left(pos),
+                        None => ordered.insert(0, row.id),
+                    }
+                    self.call("player.play", json!({"tracks": ordered, "mode": "replace"}));
                 } else {
                     self.call("player.play", json!({"tracks": [row.id], "mode": "now"}));
                 }
@@ -500,12 +504,14 @@ impl App {
                 self.filter = Some(format!("artist:{}", quote_value(&row.primary)));
                 self.sidebar = Sidebar::Tracks;
                 self.sidebar_idx = 2;
+                self.row_idx = 0;
                 self.refresh_rows();
             }
             Sidebar::Genres => {
                 self.filter = Some(format!("genre:{}", quote_value(&row.primary)));
                 self.sidebar = Sidebar::Tracks;
                 self.sidebar_idx = 2;
+                self.row_idx = 0;
                 self.refresh_rows();
             }
             Sidebar::Albums => {
@@ -513,6 +519,7 @@ impl App {
                 self.filter = Some(format!("album:{}", quote_value(album)));
                 self.sidebar = Sidebar::Tracks;
                 self.sidebar_idx = 2;
+                self.row_idx = 0;
                 self.refresh_rows();
             }
             Sidebar::Playlists => {
@@ -632,6 +639,7 @@ impl App {
                             };
                             self.sidebar = Sidebar::Tracks;
                             self.sidebar_idx = 2;
+                            self.row_idx = 0;
                             self.refresh_rows();
                         }
                     }
@@ -796,6 +804,7 @@ impl App {
                 self.filter = Some(arg.to_string());
                 self.sidebar = Sidebar::Tracks;
                 self.sidebar_idx = 2;
+                self.row_idx = 0;
                 self.refresh_rows();
             }
             "" => {}

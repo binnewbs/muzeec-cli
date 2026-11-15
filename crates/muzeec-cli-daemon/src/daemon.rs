@@ -392,7 +392,7 @@ impl Daemon {
                         .map(|t| t.id)
                         .collect::<Vec<_>>()
                 };
-                self.play_ids(ids, "replace", None)
+                self.play_ids(ids, "replace")
             }
             "library.scan" | "library.rescan" => self.cmd_scan(),
             "library.stats" => {
@@ -488,8 +488,7 @@ impl Daemon {
             .get("mode")
             .and_then(|v| v.as_str())
             .unwrap_or("replace");
-        let start = params.get("start").and_then(|v| v.as_i64());
-        self.play_ids(ids, mode, start)
+        self.play_ids(ids, mode)
     }
 
     /// Resolve an exact path or numeric id to a track id.
@@ -508,8 +507,7 @@ impl Daemon {
         None
     }
 
-    fn play_ids(&self, ids: Vec<i64>, mode: &str, start: Option<i64>) -> Result<Value> {
-        let start = start.filter(|s| ids.contains(s));
+    fn play_ids(&self, ids: Vec<i64>, mode: &str) -> Result<Value> {
         match mode {
             "append" | "next" => {
                 let mut q = self.queue.lock().unwrap();
@@ -528,12 +526,9 @@ impl Daemon {
             _ => {
                 let mut q = self.queue.lock().unwrap();
                 q.replace(ids.clone(), true);
-                if let Some(pos) = start.and_then(|s| ids.iter().position(|id| *id == s)) {
-                    q.jump(pos)?;
-                }
             }
         }
-        let first = start.or(ids.first().copied());
+        let first = ids.first().copied();
         if let Some(id) = first
             && (mode == "now" || mode == "replace")
         {
