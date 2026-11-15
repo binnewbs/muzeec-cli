@@ -284,6 +284,14 @@ impl Daemon {
         match cmd {
             "status" => Ok(self.status_json()),
             "ping" => Ok(json!({"pong": true})),
+            "daemon.shutdown" => {
+                self.shutdown();
+                let _ = std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_millis(100));
+                    std::process::exit(0);
+                });
+                Ok(json!({"ok": true}))
+            }
             "player.play" => self.cmd_play(&params),
             "player.pause" => {
                 self.engine.send(EngineCommand::Pause)?;

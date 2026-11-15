@@ -1208,6 +1208,7 @@ fn event_loop(
             {
                 if kind == crossterm::event::KeyEventKind::Press {
                     if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+                        app.call("daemon.shutdown", Value::Null);
                         app.quit = true;
                     } else {
                         app.handle_key(KeyEvent {
